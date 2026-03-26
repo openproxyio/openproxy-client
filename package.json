@@ -5,14 +5,16 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js",
+    "start": "pm2 start dist/index.js --name openproxy-node --",
+    "stop": "pm2 stop openproxy-node",
+    "logs": "pm2 logs openproxy-node",
+    "run": "node dist/index.js",
     "dev": "ts-node src/index.ts",
+    "postinstall": "command -v pm2 >/dev/null 2>&1 || npm install -g pm2",
     "bundle": "esbuild src/index.ts --bundle --platform=node --target=node18 --outfile=dist/bundle.js"
   },
   "dependencies": {
     "commander": "^12.0.0",
-    "pino": "^8.19.0",
-    "pino-pretty": "^11.0.0",
     "undici": "^7.24.5",
     "ws": "^8.16.0"
   },

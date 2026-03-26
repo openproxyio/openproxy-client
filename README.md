@@ -2,29 +2,29 @@
 
 Share your unused internet and earn on the OpenProxy network.
 
-## Install
+## Install (one line)
 
 ```bash
 curl -fsSL https://openproxy.io/install.sh | bash
 ```
 
-## Or run from source
+## Or from source
 
 ```bash
 git clone https://github.com/openproxyio/openproxy-client.git
 cd openproxy-client
 npm install
 npm run build
-node dist/index.js -w 0xYourWalletAddress
+npm start -- -w 0xYourWalletAddress
 ```
 
-## Manage (if installed via script)
+## Commands
 
 ```bash
-pm2 logs openproxy-node    # view logs
-pm2 stop openproxy-node    # stop
-pm2 restart openproxy-node # restart
-pm2 status                 # check status
+npm start -- -w 0xWallet    start node (background, via PM2)
+npm run logs                 view logs
+npm stop                     stop node
+npm run -- -w 0xWallet       run in foreground (no PM2)
 ```
 
 ## Privacy

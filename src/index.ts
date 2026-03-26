@@ -1,5 +1,4 @@
 import { Command } from 'commander';
-import pino from 'pino';
 import WebSocket from 'ws';
 import { Agent, fetch as undiciFetch } from 'undici';
 import dns from 'dns';
@@ -23,17 +22,6 @@ if (!/^0x[0-9a-fA-F]{40}$/.test(options.wallet)) {
 
 // Hardcoded Production Dispatcher URL (Allow override via env var for testing)
 const PRODUCTION_SERVER_URL = process.env.OPENPROXY_WS_URL || 'wss://api.openproxy.io/ws';
-
-// Logger setup for clean, standard terminal output
-const logger = pino({
-  transport: {
-    target: 'pino-pretty',
-    options: {
-      colorize: true,
-      translateTime: 'SYS:standard'
-    }
-  }
-});
 
 // Force IPv4 for node fetch issues on some machines
 const agent = new Agent({ connect: { lookup: dns.lookup } });
@@ -64,16 +52,22 @@ const c = {
   red: (s: string) => `\x1b[31m${s}\x1b[0m`,
 };
 
+function ts() {
+  return new Date().toISOString().replace('T', ' ').substring(0, 19);
+}
+
+function log(msg: string, level: 'info' | 'warn' | 'ok' | 'err' = 'info') {
+  const prefix = level === 'ok' ? c.green('[openproxy-client]')
+    : level === 'warn' ? c.yellow('[openproxy-client]')
+    : level === 'err' ? c.red('[openproxy-client]')
+    : c.dim('[openproxy-client]');
+  console.log(`${prefix} ${c.dim(`[${ts()}]`)} ${msg}`);
+}
+
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1048576).toFixed(2)} MB`;
-}
-
-function jobLog(status: number, bytes: number) {
-  const ts = new Date().toISOString().replace('T', ' ').substring(0, 19);
-  const statusStr = status < 400 ? c.green(`status:${status}`) : c.red(`status:${status}`);
-  console.log(`[openproxy-client] [${ts}] ${statusStr} ${formatBytes(bytes)}`);
 }
 
 class ConnectionManager {
@@ -110,7 +104,7 @@ class ConnectionManager {
       this.ws = null;
     }
 
-    console.log(`  ${c.yellow('*')} ${c.yellow('Connecting')} to ${c.dim(this.serverUrl)}`);
+    log(`connecting to ${this.serverUrl}`, 'warn');
 
     try {
       this.ws = new WebSocket(this.serverUrl);
@@ -118,16 +112,14 @@ class ConnectionManager {
       this.ws.on('open', () => {
         this.isConnecting = false;
         this.reconnectAttempts = 0;
-        console.log(`  ${c.green('*')} ${c.green('Connected')} — wallet ${c.dim(this.wallet)}`);
+        log(`connected -- wallet ${this.wallet}`, 'ok');
 
         this.send(JSON.stringify({ type: 'init', wallet: this.wallet.toLowerCase() }));
-        console.log(`[openproxy-client] Waiting for jobs...`);
+        log('waiting for jobs...', 'ok');
 
-        // Periodic heartbeat so the user knows it's alive
         if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
         this.heartbeatInterval = setInterval(() => {
-          const ts = new Date().toISOString().replace('T', ' ').substring(0, 19);
-          console.log(`[openproxy-client] [${ts}] listening...`);
+          log('waiting for jobs...');
         }, 60_000);
       });
 
@@ -144,7 +136,7 @@ class ConnectionManager {
             this.jobCount++;
 
             if (!isSafeUrl(message.url)) {
-              logger.warn(`[BLOCKED] Unsafe URL rejected for request ${message.reqId.substring(0, 8)}`);
+              log('blocked unsafe URL', 'warn');
               this.send(JSON.stringify({ reqId: message.reqId, status: 403, data: "URL not allowed" }));
               return;
             }
@@ -194,7 +186,8 @@ class ConnectionManager {
               const textData = Buffer.concat(chunks).toString('utf8');
               this.bytesRouted += accumulatedBytes;
 
-              jobLog(response.status, accumulatedBytes);
+              const ok = response.status < 400;
+              log(`Proxied a request! status: ${response.status} - size ${formatBytes(accumulatedBytes)}`, ok ? 'ok' : 'err');
 
               this.send(JSON.stringify({
                 reqId: message.reqId,
@@ -202,8 +195,7 @@ class ConnectionManager {
                 data: textData
               }));
             } catch (fetchErr: any) {
-              const ts = new Date().toLocaleTimeString();
-              console.log(`  ${c.dim(ts)}  ${c.red('x')} ${c.dim(message.reqId.substring(0, 8))}  ${c.red(fetchErr.message)}`);
+              log(`${fetchErr.message}`, 'err');
               if (fetchErr.message === "PAYLOAD_TOO_LARGE") {
                 this.send(JSON.stringify({
                   reqId: message.reqId,
@@ -226,31 +218,31 @@ class ConnectionManager {
             }
           }
         } catch (err: any) {
-          logger.error(`Message Parse Error: ${err.message}`);
+          log(`parse error: ${err.message}`, 'err');
         }
       });
 
       this.ws.on('close', () => {
         this.isConnecting = false;
         if (this.heartbeatInterval) { clearInterval(this.heartbeatInterval); this.heartbeatInterval = null; }
-        console.log(`\n  ${c.yellow('*')} ${c.yellow('Disconnected')} from dispatcher`);
+        log('disconnected', 'warn');
         this.reconnect();
       });
 
       this.ws.on('error', (err) => {
         this.isConnecting = false;
-        logger.error(`WebSocket Error: ${err.message}`);
+        log(`${err.message}`, 'err');
       });
     } catch (err: any) {
       this.isConnecting = false;
-      logger.error(`Connection Error: ${err.message}`);
+      log(`${err.message}`, 'err');
       this.reconnect();
     }
   }
 
   private reconnect() {
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      logger.error('Max reconnection attempts reached. Exiting.');
+      log('max reconnection attempts reached. exiting.', 'err');
       process.exit(1);
     }
 
@@ -258,15 +250,21 @@ class ConnectionManager {
     const backoffMs = Math.pow(2, this.reconnectAttempts) * 1000;
     this.reconnectAttempts++;
 
-    console.log(`  ${c.yellow('*')} ${c.yellow(`Reconnecting`)} in ${backoffMs / 1000}s ${c.dim(`(attempt ${this.reconnectAttempts})`)}`);
+    log(`reconnecting in ${backoffMs / 1000}s (attempt ${this.reconnectAttempts})`, 'warn');
     setTimeout(() => this.connect(), backoffMs);
   }
 }
 
 // Start the node
 console.log('');
-console.log(`  ${c.bold('OpenProxy Node')}`);
-console.log(`  ${c.dim('Earn by routing traffic through your connection')}`);
+console.log(c.green(' ██████╗ ██████╗ ███████╗███╗   ██╗██████╗ ██████╗  ██████╗ ██╗  ██╗██╗   ██╗'));
+console.log(c.green('██╔═══██╗██╔══██╗██╔════╝████╗  ██║██╔══██╗██╔══██╗██╔═══██╗╚██╗██╔╝╚██╗ ██╔╝'));
+console.log(c.green('██║   ██║██████╔╝█████╗  ██╔██╗ ██║██████╔╝██████╔╝██║   ██║ ╚███╔╝  ╚████╔╝ '));
+console.log(c.green('██║   ██║██╔═══╝ ██╔══╝  ██║╚██╗██║██╔═══╝ ██╔══██╗██║   ██║ ██╔██╗   ╚██╔╝  '));
+console.log(c.green('╚██████╔╝██║     ███████╗██║ ╚████║██║     ██║  ██║╚██████╔╝██╔╝ ██╗   ██║   '));
+console.log(c.green(' ╚═════╝ ╚═╝     ╚══════╝╚═╝  ╚═══╝╚═╝     ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝   ╚═╝   '));
+console.log('');
+console.log(c.dim(`  v1.0.0 | node | ${options.wallet.substring(0, 6)}...${options.wallet.substring(38)}`));
 console.log('');
 
 const manager = new ConnectionManager(options.wallet, PRODUCTION_SERVER_URL);
@@ -274,6 +272,6 @@ manager.connect();
 
 // Handle graceful shutdown
 process.on('SIGINT', () => {
-  console.log(`\n  ${c.dim('Shutting down...')}`);
+  log('shutting down');
   process.exit(0);
 });
